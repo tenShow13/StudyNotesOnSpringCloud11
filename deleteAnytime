@@ -1,0 +1,133 @@
+
+
+
+C:\Users\huangbr\Doc\self-Education\Spring\SpringOfficialDoc\attachment\feign实现原理和openfeign 区别.md
+
+
+
+问题： dubbo 和  http 协议的区别
+1 长连接 dubbo 是 
+2 连接复用
+3 字段冗余 
+4 底层数据传输：  dubbo 传输的是二进制 对象的序列化数据 。而 http 底层使用的是json 进行传输 
+
+
+问题： feign 底层连接池  阻塞式调用 ，每次远程调用都需要一个线程 
+
+
+问题： 灰度发布如何实现的
+1 新上来的服务，通过网关将部分流量转向新发布的服务，如果没问题，逐渐将流量迁移到新发布的服务。
+具体的： 网关的地方可以根据用户的UUID取模 让该用户的所有后续请求都打到新发布的服务上，避免再新老服务之间横跳 
+
+
+问题： springcloud alibaba 有哪些技术？或者说分布式环境，需要哪些技术。比如 注册中心，配置中心，链路追踪，网关，服务降级等等
+给出一个完整的微服务系统，涉及的技术点及其对应的实现技术。 这些实现技术哪些是 springcloud alibaba 的和其他咋对比
+参考 微服务结合SpringCloudAlibaba技术选型.md 
+总结： 
+服务注册与发现 ： Nacos Discovery 
+配置中心：   Nacos Config
+API 网关  ：  Spring Cloud Gateway（或对性能有更高诉求上 Higress）。 
+服务到服务调用 & 负载均衡 ：  OpenFeign + Spring Cloud LoadBalancer；对部分核心链路用 Dubbo 
+流控/熔断/降级 ： Sentinel（网关侧/服务侧双管）。
+消息/事件驱动（消息中间件） ：  RocketMQ（含事务消息/延迟消息）。
+分布式事务 ： Seata（优先 AT；部分场景采用 TCC/SAGA）
+链路追踪 & 可观测性 ：  skywalking （不侵入源码，Agent 模式实现 ，轻量级，UI友好）
+
+其他（定时调度 | 配置/事件总线）
+
+问题： 马士兵上关于微服务的 SpringCloud 组件
+1 eureka 注册中心 
+2 Actuator + SpringCloud Admin 实现微服务状态监控
+3 RestTemplate 
+4 Ribbon  负载均衡
+5 Feign 远程调用
+6 Hystrix 降级熔断
+7 Zuul 
+8 Sleuth+zipkin 链路追踪
+9 SpringCloud Config 配置中心
+
+
+SpringCloud Alibaba 组件 
+Sentinel 流控/熔断/降级
+Nacos 注册中心和配置中心
+RocketMQ（消息/事件驱动）、Seata（分布式事务）
+
+
+
+--------------//////
+
+思路： 微服务架构技术选型，核心点的技术选型（和其他技术对比优缺点，简单讲解技术的架构，比如搭建需要使用哪些组件），然后找对应的课程，基础入门
+整理出和 Jenkins 类似的文档，然后使用AI 润色为一个面试话术，
+然后 网上找对应的热点面试题，然后整理为自己的话术，然后AI 润色
+然后记忆背诵。
+之前有 rocketmq的基础和nacos 的基础 快速捡起来 
+
+
+链路追踪技术选型
+	主要是用于问题排查，比如请求链路，以及请求耗时的场景
+sleuth+zipkin 
+	当前在企业应用不多，多用于老项目（3年前的项目），实现链路追踪+数据收集展示，用于监控链路调用中各个服务耗时情况，
+	对源码侵入（需要引入jar包）
+	日志格式： [服务名，traceID，spanID]
+skywalking
+	不侵入源码，Java Agent 方式实现 ，轻量级，UI友好
+	Java Agent 原理： 监控服务实例里面所有class运行 todo
+Spring Admin 只能监控服务实例健康状态，不能监控链路的请求耗时。可以监控cpu占用率，线程数量，然后推送消息给运维
+promethues 	
+	硬件监控，无法监控每个服务在链路上的延迟，比如： 内存占用情况，cpu使用率，
+pinpoint
+	性能不行，现在不是主流，侵入源码。优点是，收集的信息完整，
+
+配置中心的技术选型对比
+Spring cloud config
+	和企业级服务总线整合，实现配置统一推送和管理，底层是通过消息中间件实现，
+	具体的： SpringCloud config 将配置文件放在 git 上， Config 监听git上的变动，如果有变动推送消息中间件，  todo
+Nacos 阿里
+	轻量级，无需消息中间件，不走BUS ，配置更改实时生效。配置文件数据放在数据库， 
+	不建议使用， 配置和注册中心放在一起，不符合单一原则
+	问题： 数据持久化，集群
+Apollo 携程
+	轻量级，无需消息中间件，不走BUS ，支持灰度发布，高可用，集群化，配置更改实时生效 。配置文件数据放在数据库，
+	组件结构： 服务端，管理端，eureka 
+	http连接，不是长连接，短连接+轮询。使用http解耦客户端，客户端可以是多种类型
+其他： 线上第三方密钥这些敏感数据是如何处理的 （数据库密码） 
+	对称加密和非对称加密 
+	
+限流熔断降级
+Hystrix 
+	已不再维护 
+	使用线程池实现  todo ，计数器算法 
+	侵入源码 
+Sentinel	
+	google 的 ratelimiter ： 线程安全的，可共享的，令牌桶算法，
+	不侵入代码，只需要引入jar包
+
+
+响应式web
+	节省了线程，实质是线程复用
+	传统的tomcat  web 网站处理请求，会为每个request启动单独线程处理，如果中间有耗时操作，该线程会阻塞等待，直到线程释放。
+	响应式web 的区别在于，不会阻塞等待耗时请求，会被线程池复用，处理其他事务，当请求有数据返回，从线程池中获取线程进行处理。
+	需要保证处理请求响应的线程需要重置上下文。 
+	相似的技术， Netty 或者异步网络IO 
+	实现方式： 
+	1 http协议下服务器推送 SSE（server  send event）
+		http 1.1 版本实现通过 stream 响应格式（http 请求返回头中 MIME Type/ Stream） ，如果是这种类型，http 不会断开当前请求。可以查看对应课程
+		基于通讯协议，跨平台，不需要服务端和客户端额外操作。
+	2 Project Reactor
+		
+	3 RXJava2 
+	4 WebFlux
+		Spring MVC 升级版 ，SpringMVC 需要运行在 JavaEE Servlet 容器中，而 WebFlux 不需要，底层基于 netty 
+		基于 WebFlux 可以实现异步响应式编程 
+	5 SpringCloud GateWay 
+
+
+
+问题： 响应式编程是咋回事 和 netty 有啥关系？ Mono类又是啥 
+问题： 网络安全方面 http 和 https 有啥区别 
+
+
+
+
+
+
