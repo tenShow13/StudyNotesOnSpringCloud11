@@ -1,0 +1,157 @@
+
+
+
+固定窗口
+	维护窗口开始时间，每次获取token 需要判断当前时间是否在窗口中，
+		如果是，累加 token 
+		如果不是， clean 已累加都token，重新计数
+	缺点： 窗口边界“抢跑”问题（边界处可能出现突发），公平性差 
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class FixedWindowRateLimiter implements RateLimiter {
+    private final int limit;
+    private final long windowMs;
+    private volatile long windowStart;
+    private final AtomicInteger counter = new AtomicInteger(0);
+
+    public FixedWindowRateLimiter(int limit, long windowMs) {
+        this.limit = limit;
+        this.windowMs = windowMs;
+        this.windowStart = System.currentTimeMillis();
+    }
+
+    @Override
+    public synchronized boolean allow() {
+        long now = System.currentTimeMillis();
+        if (now - windowStart >= windowMs) {
+            windowStart = now;
+            counter.set(0);
+        }
+        if (counter.get() < limit) {
+            counter.incrementAndGet();
+            return true;
+        }
+        return false;
+    }
+}
+
+滑动窗口
+	解决固定窗口抢跑问题
+	维护队列，记录每次获取token时间点和获取数据，每次获取token 计算以当前时间点为右边界的窗口的左边界，
+	poll 队列中所有小于窗口左边界的元素，回收元素的token 。
+	如果允许获取的token数量大于当前需求数量，获取成功，将当前时间点以及获取的token数量塞入队列
+	否则获取token失败。
+
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+public class SlidingWindowLogRateLimiter implements RateLimiter {
+    private final int limit;
+    private final long windowMs;
+    private final Deque<Long> timestamps = new ArrayDeque<>();
+
+    public SlidingWindowLogRateLimiter(int limit, long windowMs) {
+        this.limit = limit;
+        this.windowMs = windowMs;
+    }
+
+    @Override
+    public synchronized boolean allow() {
+        long now = System.currentTimeMillis();
+        long threshold = now - windowMs;
+        while (!timestamps.isEmpty() && timestamps.peekFirst() < threshold) {
+            timestamps.pollFirst();
+        }
+        if (timestamps.size() < limit) {
+            timestamps.addLast(now);
+            return true;
+        }
+        return false;
+    }
+}
+
+令牌桶
+	上一次获取时间点 和 截至上一次获取时间点 桶中令牌数量
+	类似于以恒定速度往桶中放入令牌，不超过 maxSize 个数。
+	维护上一次获取令牌的时间点，每次获取token ，根据当前时间和上一次获取token时间点差值，计算中间这段时间点生成的 token 数量
+	同时累加上上一次获取token后剩余的数量，得到当前可以获取token数量
+	更新上一次获取令牌时间点为当前时间
+	判断可获取token数量是否满足当前请求数量，如果是返回true 剩余token数扣减当前请求数量
+	否则返回false
+
+public class TokenBucketRateLimiter implements RateLimiter {
+    private final double refillRatePerSec; // 每秒补充的令牌数
+    private final double capacity;
+    private double tokens;
+    private long lastRefillTime;
+
+    public TokenBucketRateLimiter(double refillRatePerSec, double capacity) {
+        this.refillRatePerSec = refillRatePerSec;
+        this.capacity = capacity;
+        this.tokens = capacity;
+        this.lastRefillTime = System.nanoTime();
+    }
+
+    @Override
+    public synchronized boolean allow() {
+        long now = System.nanoTime();
+        double elapsedSec = (now - lastRefillTime) / 1_000_000_000.0;
+        tokens = Math.min(capacity, tokens + elapsedSec * refillRatePerSec);
+        lastRefillTime = now;
+
+        if (tokens >= 1.0) {
+            tokens -= 1.0;
+            return true;
+        }
+        return false;
+    }
+}
+
+
+漏桶
+	和令牌桶是反着的，模拟漏水的过程，也需要维护上一次获取token时间点和剩余token数量
+	每次请求相当于往桶中放水。
+	每次请求根据当前时间和上一次请求时间计算时间段，然后根据速率计算期间漏掉的token数量
+	更新剩余token数量 和 上一次获取时间点
+	判断当前请求的token数量+剩余token数量是否超过阈值，
+		如果是 返回false 
+		如果否 累加剩余token数量	
+
+public class LeakyBucketRateLimiter implements RateLimiter {
+    private final double leakRatePerSec; // 恒定处理速率
+    private final int capacity;
+    private double water; // 当前队列/水量
+    private long lastLeakTime;
+
+    public LeakyBucketRateLimiter(double leakRatePerSec, int capacity) {
+        this.leakRatePerSec = leakRatePerSec;
+        this.capacity = capacity;
+        this.water = 0;
+        this.lastLeakTime = System.nanoTime();
+    }
+
+    private void leak() {
+        long now = System.nanoTime();
+        double elapsed = (now - lastLeakTime) / 1_000_000_000.0;
+        water = Math.max(0, water - elapsed * leakRatePerSec);
+        lastLeakTime = now;
+    }
+
+    @Override
+    public synchronized boolean allow() {
+        leak();
+        if (water + 1 <= capacity) {
+            water += 1;
+            return true; // 进桶，等待恒速处理（非阻塞版本只判定是否可进）
+        }
+        return false; // 溢出：拒绝
+    }
+}
+``
+
+问题：  令牌桶 和 漏桶 的区别
+	令牌桶：允许突发（闲时攒令牌，忙时一次性用掉），只要有令牌就立刻放行；控制的是平均速率+最大突发。
+	漏桶：强制平滑输出（恒定出水/处理速率），输入再突发也只能按固定速率流出；控制的是输出速率上限和缓冲队列长度。
+	（因此，令牌桶更像“电池”——能充能放；漏桶更像“水龙头”——只按固定流量出水。）
